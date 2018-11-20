@@ -22,14 +22,21 @@ Run the `JUnit` tests
 $ mvn test
 ```
 
+## Create deployment bucket
+Create a bucket to be used for built jars and for SAM CLI deployments
+```bash
+$ aws s3 mb s3://my-sam-deployment-bucket/
+```
+
 ## Validate SAM template
 ```
 $ sam validate --template template.yaml
 ```
 
 ## Deployment
+Push built jar to S3 and run sam package/sam deploy as below.
 ```
-$ Push built jar to S3 and run sam package/sam deploy as below.
+$ aws s3 cp ./target/HelloWorld-1.0.jar s3://my-sam-deployment-bucket/target/HelloWorld-1.0.jar
 
 ```
 
