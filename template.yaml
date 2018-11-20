@@ -1,0 +1,1498 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: 'AWS::Serverless-2016-10-31'
+Description: 'S3, Kinesis, Firehose, Lambda, API Gateway, DynamoDB, Elasticsearch'
+Parameters:
+  Env:
+    Description: The environment to deploy
+    Type: String
+    AllowedPattern: '[a-zA-Z0-9]+'
+  SamDeploymentsS3Bucket:
+    Description: An S3 bucket holding the lambda deployment packages
+    Type: String
+  AlarmEmail:
+    Description: An email address to send alarm notifications to
+    Type: String
+  SQSMessageRetentionPeriod:
+    Description: Time in days for SQS ingest queue to retain messages
+    Type: Number
+    Default: 1209600
+  SQSMaximumMessageSize:
+    Description: Max size of a message before it is rejected by SQS
+    Type: Number
+    Default: 262144
+  IngestDLQDepthAlarmThreshold:
+    Description: Number of messages in dead letter queue before alarm
+    Type: String
+    Default: 1
+  IngestQueueDepthAlarmThreshold:
+    Description: Number of messages in ingest queue before alarm
+    Type: String
+    Default: 1
+  EdgestoreReadCapacity:
+    Description: Read capacity of the edgestore table
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 10000
+    ConstraintDescription: Must be between 1 and 10000
+  EdgestoreWriteCapacity:
+    Description: Write capacity of the edgestore table
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 10000
+    ConstraintDescription: Must be between 1 and 10000
+  GraphindexReadCapacity:
+    Description: Read capacity of the graphindex table
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 10000
+    ConstraintDescription: Must be between 1 and 10000
+  GraphindexWriteCapacity:
+    Description: Write capacity of the graphindex table
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 10000
+    ConstraintDescription: Must be between 1 and 10000
+  JanusGraphIdsReadCapacity:
+    Description: Read capacity of the janusgraph_ids table
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 10000
+    ConstraintDescription: Must be between 1 and 10000
+  JanusGraphIdsWriteCapacity:
+    Description: Write capacity of the janusgraph_ids table
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 10000
+    ConstraintDescription: Must be between 1 and 10000
+  SystemPropertiesReadCapacity:
+    Description: Read capacity of the system_properties table
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 10000
+    ConstraintDescription: Must be between 1 and 10000
+  SystemPropertiesWriteCapacity:
+    Description: Write capacity of the system_properties table
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 10000
+    ConstraintDescription: Must be between 1 and 10000
+  TxlogReadCapacity:
+    Description: Read capacity of the txlog table
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 10000
+    ConstraintDescription: Must be between 1 and 10000
+  TxlogWriteCapacity:
+    Description: Write capacity of the txlog table
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 10000
+    ConstraintDescription: Must be between 1 and 10000
+  SystemlogReadCapacity:
+    Description: Read capacity of the systemlog table
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 10000
+    ConstraintDescription: Must be between 1 and 10000
+  SystemlogWriteCapacity:
+    Description: Write capacity of the systemlog table
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 10000
+    ConstraintDescription: Must be between 1 and 10000
+  XmlStreamShardCount:
+    Type: String
+  BatchSize:
+    Type: String
+  RetentionPeriodHours:
+    Type: String
+    ConstraintDescription: Minimum is 24
+  JwtPubKeyUrl:
+    Type: String
+  VpcCIDR:
+    Description: Please enter the IP range (CIDR notation) for this VPC
+    Type: String
+    Default: 10.0.0.0/16
+  PublicSubnet1CIDR:
+    Description: Please enter the IP range (CIDR notation) for the public subnet in the first Availability Zone
+    Type: String
+    Default: 10.0.1.0/24
+  PublicSubnet2CIDR:
+    Description: Please enter the IP range (CIDR notation) for the public subnet in the second Availability Zone
+    Type: String
+    Default: 10.0.2.0/24
+  PrivateSubnet1CIDR:
+    Description: Please enter the IP range (CIDR notation) for the private subnet in the first Availability Zone
+    Type: String
+    Default: 10.0.3.0/24
+  PrivateSubnet2CIDR:
+    Description: Please enter the IP range (CIDR notation) for the private subnet in the second Availability Zone
+    Type: String
+    Default: 10.0.4.0/24
+  ElasticsearchVersion:
+    Description: Version for elasticsearch
+    Type: String
+    Default: '6.3'
+  ElasticsearchDomainIops:
+    Description: IOPs for elasticsearch
+    Type: String
+    Default: '0'
+  ESVolumeSize:
+    Description: Volume size in GB for elasticsearch
+    Type: String
+    Default: '10'
+  ESInstanceCount:
+    Description: Number of elasticsearch nodes
+    Type: String
+    Default: '1'
+  ESInstanceType:
+    Description: Instance type for elasticsearch nodes
+    Type: String
+    Default: 'c4.large.elasticsearch'
+Resources:
+  KMSKey:
+    Type: 'AWS::KMS::Key'
+    Properties:
+      KeyPolicy:
+        Version: 2012-10-17
+        Id: !Sub 'enable-root-kms-${Ref}'
+        Statement:
+          - Sid: Enable root IAM user
+            Effect: Allow
+            Principal:
+              AWS: !Join
+                - ''
+                - - 'arn:aws:iam::'
+                  - !Ref 'AWS::AccountId'
+                  - ':root'
+            Action: 'kms:*'
+            Resource: '*'
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+  IngestDeadLetterQueue:
+    Type: 'AWS::SQS::Queue'
+    Properties:
+      Description: !Sub 'ingest-sqs-dead-letter-${Env}'
+      QueueName: !Sub 'ingest-sqs-dead-letter-${Env}'
+      KmsMasterKeyId: !Ref KMSKey
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+  IngestQueue:
+    Type: '§AWS::SQS::Queue'
+    Properties:
+      QueueName: !Sub 'ingest-sqs-${Env}'
+      Description: !Sub 'ingest-sqs-${Env}'
+      KmsMasterKeyId: !Ref KMSKey
+      FifoQueue: true
+      SQSMessageRetentionPeriod: !Ref SQSMessageRetentionPeriod
+      MaximumMessageSize: !Ref SQSMaximumMessageSize
+      RedrivePolicy: !GetAtt IngestDeadLetterQueue.QueueName
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+  AlarmTopic:
+    Type: 'AWS::SNS::Topic'
+    Properties:
+      Subscription:
+        -
+          Endpoint:
+            Ref: AlarmEmail
+          Protocol: 'email'
+  IngestQueueDepthAlarm:
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      AlarmDescription: !Sub 'Alarm if queue depth grows beyond ${IngestQueueDepthAlarmThreshold} messages'
+      Namespace: 'AWS/SQS'
+      MetricName: 'ApproximateNumberOfMessagesVisible'
+      Dimensions:
+        -
+          Name: 'QueueName'
+          Value: !GetAtt IngestQueue.QueueName
+      Statistic: 'Sum'
+      Period: '60'
+      EvaluationPeriods: '1'
+      Threshold: !Ref IngestQueueDepthAlarmThreshold
+      ComparisonOperator: 'GreaterThanThreshold'
+      AlarmActions:
+        -
+          Ref: 'AlarmTopic'
+      InsufficientDataActions:
+        -
+          Ref: 'AlarmTopic'
+  IngestDLQDepthAlarm:
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      AlarmDescription: !Sub 'Alarm if queue depth grows beyond ${IngestDLQDepthAlarmThreshold} messages'
+      Namespace: 'AWS/SQS'
+      MetricName: 'ApproximateNumberOfMessagesVisible'
+      Dimensions:
+        -
+          Name: 'QueueName'
+          Value: !GetAtt IngestDeadLetterQueue.QueueName
+      Statistic: 'Sum'
+      Period: '60'
+      EvaluationPeriods: '1'
+      Threshold: !Ref IngestDLQDepthAlarmThreshold
+      ComparisonOperator: 'GreaterThanThreshold'
+      AlarmActions:
+        -
+          Ref: 'AlarmTopic'
+      InsufficientDataActions:
+        -
+          Ref: 'AlarmTopic'
+  Edgestore:
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      AttributeDefinitions:
+        -
+          AttributeName: 'hk'
+          AttributeType: 'S'
+        -
+          AttributeName: 'rk'
+          AttributeType: 'S'
+      KeySchema:
+        -
+          AttributeName: 'hk'
+          KeyType: 'HASH'
+        -
+          AttributeName: 'rk'
+          KeyType: 'RANGE'
+      ProvisionedThroughput:
+        ReadCapacityUnits:
+          Ref: EdgestoreReadCapacity
+        WriteCapacityUnits:
+          Ref: EdgestoreWriteCapacity
+      TableName:
+        Fn::Join:
+        - ''
+        - - Ref: Env
+          - _edgestore
+      SSESpecification:
+        SSEEnabled: true
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+  Graphindex:
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      AttributeDefinitions:
+        -
+          AttributeName: 'hk'
+          AttributeType: 'S'
+        -
+          AttributeName: 'rk'
+          AttributeType: 'S'
+      KeySchema:
+        -
+          AttributeName: 'hk'
+          KeyType: 'HASH'
+        -
+          AttributeName: 'rk'
+          KeyType: 'RANGE'
+      ProvisionedThroughput:
+        ReadCapacityUnits:
+          Ref: GraphindexReadCapacity
+        WriteCapacityUnits:
+          Ref: GraphindexWriteCapacity
+      TableName:
+        Fn::Join:
+        - ''
+        - - Ref: Env
+          - _graphindex
+      SSESpecification:
+        SSEEnabled: true
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+  JanusGraphIds:
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      AttributeDefinitions:
+        -
+          AttributeName: 'hk'
+          AttributeType: 'S'
+        -
+          AttributeName: 'rk'
+          AttributeType: 'S'
+      KeySchema:
+        -
+          AttributeName: 'hk'
+          KeyType: 'HASH'
+        -
+          AttributeName: 'rk'
+          KeyType: 'RANGE'
+      ProvisionedThroughput:
+        ReadCapacityUnits:
+          Ref: JanusGraphIdsReadCapacity
+        WriteCapacityUnits:
+          Ref: JanusGraphIdsWriteCapacity
+      TableName:
+        Fn::Join:
+        - ''
+        - - Ref: Env
+          - _janusgraph_ids
+      SSESpecification:
+        SSEEnabled: true
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+  SystemProperties:
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      AttributeDefinitions:
+        -
+          AttributeName: 'hk'
+          AttributeType: 'S'
+        -
+          AttributeName: 'rk'
+          AttributeType: 'S'
+      KeySchema:
+        -
+          AttributeName: 'hk'
+          KeyType: 'HASH'
+        -
+          AttributeName: 'rk'
+          KeyType: 'RANGE'
+      ProvisionedThroughput:
+        ReadCapacityUnits:
+          Ref: SystemPropertiesReadCapacity
+        WriteCapacityUnits:
+          Ref: SystemPropertiesWriteCapacity
+      TableName:
+        Fn::Join:
+        - ''
+        - - Ref: Env
+          - _system_properties
+      SSESpecification:
+        SSEEnabled: true
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+  Txlog:
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      AttributeDefinitions:
+        -
+          AttributeName: 'hk'
+          AttributeType: 'S'
+        -
+          AttributeName: 'rk'
+          AttributeType: 'S'
+      KeySchema:
+        -
+          AttributeName: 'hk'
+          KeyType: 'HASH'
+        -
+          AttributeName: 'rk'
+          KeyType: 'RANGE'
+      ProvisionedThroughput:
+        ReadCapacityUnits:
+          Ref: TxlogReadCapacity
+        WriteCapacityUnits:
+          Ref: TxlogWriteCapacity
+      TableName:
+        Fn::Join:
+        - ''
+        - - Ref: Env
+          - _txlog
+      SSESpecification:
+        SSEEnabled: true
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+  Systemlog:
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      AttributeDefinitions:
+        -
+          AttributeName: 'hk'
+          AttributeType: 'S'
+        -
+          AttributeName: 'rk'
+          AttributeType: 'S'
+      KeySchema:
+        -
+          AttributeName: 'hk'
+          KeyType: 'HASH'
+        -
+          AttributeName: 'rk'
+          KeyType: 'RANGE'
+      ProvisionedThroughput:
+        ReadCapacityUnits:
+          Ref: SystemlogReadCapacity
+        WriteCapacityUnits:
+          Ref: SystemlogWriteCapacity
+      TableName:
+        Fn::Join:
+        - ''
+        - - Ref: Env
+          - _systemlog
+      SSESpecification:
+        SSEEnabled: true
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+  APIGatewayEndpointSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      VpcId: !Ref VPC
+      GroupDescription: Security group for API Gateway Private endpoint
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '443'
+          ToPort: '443'
+          CidrIp: !Ref VpcCIDR
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: '0'
+          ToPort: '65535'
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+  S3EventDrivenLogGroup:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/s3-event-log-group-${Env}'
+      RetentionInDays: 90
+  CustomAuthLogGroup:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/auth-log-group-${Env}'
+      RetentionInDays: 90
+  TransformLogGroup:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/transform-log-group-${Env}'
+      RetentionInDays: 90
+  QueryLogGroup:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/query-log-group-${Env}'
+      RetentionInDays: 90
+  BackupLogGroup:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/backup-log-group-${Env}'
+      RetentionInDays: 90
+  CloudWatchRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - 'apigateway.amazonaws.com'
+            Action: 'sts:AssumeRole'
+      Path: '/'
+      ManagedPolicyArns:
+       - 'arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs'
+  ApiGatewayCloudwatchRoleArn:
+    Type: 'AWS::ApiGateway::Account'
+    Properties:
+     CloudWatchRoleArn: !GetAtt CloudWatchRole.Arn
+  QueryLambdaApiGatewayInvokePermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !GetAtt QueryLambdaFunction.Arn
+      Principal: 'apigateway.amazonaws.com'
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RestApi}/*/POST/'
+  CustomAuthApiGatewayInvokePermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !GetAtt CustomAuthLambdaFunction.Arn
+      Principal: 'apigateway.amazonaws.com'
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RestApi}/*'
+  CustomAuthorizer:
+    Type: 'AWS::ApiGateway::Authorizer'
+    Properties:
+      Name: !Sub 'JwtAuthorizer-${Env}'
+      AuthorizerResultTtlInSeconds: '300'
+      AuthorizerUri:
+        Fn::Join:
+          - ''
+          -
+            - 'arn:aws:apigateway:'
+            - !Ref 'AWS::Region'
+            - ':lambda:path/2015-03-31/functions/'
+            - !GetAtt 'CustomAuthLambdaFunction.Arn'
+            - '/invocations'
+      Type: 'TOKEN'
+      IdentitySource: 'method.request.header.Auth'
+      RestApiId: !Ref 'RestApi'
+  RestApi:
+    Type: 'AWS::ApiGateway::RestApi'
+    Properties:
+      Name: 'Janusgraph query API'
+      Parameters:
+        endpointConfigurationTypes: PRIVATE
+      Body:
+        swagger: 2.0
+        Policy:
+          Version: '2012-10-17'
+          Statement:
+            -
+              Effect: 'Deny'
+              Principal: '*'
+              Action: 'execute-api:Invoke'
+              Resource: 'execute-api:/*/*/*'
+              Condition:
+                StringNotEquals:
+                  aws:sourceVpc: !Ref VPC
+            -
+              Effect: 'Allow'
+              Principal: '*'
+              Action: 'execute-api:Invoke'
+              Resource: 'execute-api:/*/*/*'
+        info:
+          version: 0.0.1
+          title: Query API
+        basePath: /
+        schemes:
+          - https
+        definitions:
+          Empty:
+            type: object
+  APIGatewayRootMethod:
+    Type: 'AWS::ApiGateway::Method'
+    DependsOn:
+      - 'QueryLambdaFunction'
+    Properties:
+      AuthorizationType: 'NONE'
+      HttpMethod: 'POST'
+      Integration:
+        IntegrationHttpMethod: 'POST'
+        Type: 'AWS_PROXY'
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${QueryLambdaFunction.Arn}/invocations'
+      ResourceId: !GetAtt RestApi.RootResourceId
+      RestApiId: !Ref RestApi
+  APIGatewayDeployment:
+    Type: 'AWS::ApiGateway::Deployment'
+    DependsOn:
+      - 'APIGatewayRootMethod'
+    Properties:
+      RestApiId: !Ref RestApi
+      Description: !Sub 'API gateway deployment ${Env}'
+      StageName: !Sub 'query-janusgraph-${Env}'
+  GremlinQueryModel:
+    Type: 'AWS::ApiGateway::Model'
+    Properties:
+      RestApiId:
+        Ref: RestApi
+      ContentType: 'application/json'
+      Description: 'Schema for a gremlin query'
+      Name: GremlinQueryModel
+      Schema: {}
+  XmlIngestBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Sub 'xmlfeeds3bucket-${Env}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: AES256
+      Tags:
+        -
+          Key: Env
+          Value: !Ref Env
+  ESSnapshotBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Sub 'es-snapshots-s3bucket-${Env}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: AES256
+      Tags:
+        -
+          Key: Env
+          Value: !Ref Env
+  TransformedBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Sub 'transformeds3bucket-${Env}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: AES256
+      Tags:
+        -
+          Key: Env
+          Value: !Ref Env
+  FireHoseStream:
+    DependsOn:
+      - 'FireHosePolicy'
+      - 'TransformedBucket'
+    Type: 'AWS::KinesisFirehose::DeliveryStream'
+    Properties:
+      DeliveryStreamType: KinesisStreamAsSource
+      KinesisStreamSourceConfiguration:
+        KinesisStreamARN: !GetAtt KinesisStream.Arn
+        RoleARN: !GetAtt FireHoseRole.Arn
+      ExtendedS3DestinationConfiguration:
+        BucketARN: !Join
+          - ''
+          - - 'arn:aws:s3:::'
+            - !Ref TransformedBucket
+        BufferingHints:
+          IntervalInSeconds: '60'
+          SizeInMBs: '50'
+        CompressionFormat: UNCOMPRESSED
+        Prefix: transformed/
+        RoleARN: !GetAtt FireHoseRole.Arn
+        ProcessingConfiguration:
+          Enabled: 'true'
+          Processors:
+            - Parameters:
+                - ParameterName: LambdaArn
+                  ParameterValue: !GetAtt TransformLambdaFunction.Arn
+              Type: Lambda
+  FireHoseRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service: firehose.amazonaws.com
+            Action: 'sts:AssumeRole'
+            Condition:
+              StringEquals:
+                'sts:ExternalId': !Ref 'AWS::AccountId'
+  FireHosePolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: firehose_delivery_policy
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'kinesis:*'
+            Resource:
+              - !GetAtt KinesisStream.Arn
+          - Effect: Allow
+            Action:
+              - 's3:AbortMultipartUpload'
+              - 's3:GetBucketLocation'
+              - 's3:GetObject'
+              - 's3:ListBucket'
+              - 's3:ListBucketMultipartUploads'
+              - 's3:PutObject'
+            Resource:
+              - !Join
+                - ''
+                - - 'arn:aws:s3:::'
+                  - !Ref TransformedBucket
+              - !Join
+                - ''
+                - - 'arn:aws:s3:::'
+                  - !Ref TransformedBucket
+                  - '*'
+      Roles:
+        - !Ref FireHoseRole
+  KinesisStream:
+    Type: 'AWS::Kinesis::Stream'
+    Properties:
+      Name: !Sub 'kinesisxmlfeed-${Env}'
+      RetentionPeriodHours: !Ref RetentionPeriodHours
+      ShardCount: !Ref XmlStreamShardCount
+      Tags:
+        -
+          Key: Env
+          Value: !Ref Env
+  ScheduledBackupRule:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Description: 'ScheduledBackupRule'
+      ScheduleExpression: 'rate(4 hours)'
+      State: 'ENABLED'
+      Targets:
+        -
+          Arn: !GetAtt BackupDynamoDBAndESLambdaFunction.Arn
+          Id: 'BackupDynamoDBAndESLambdaFunction'
+  ScheduledWarmRule:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Description: 'ScheduledWarmRule'
+      ScheduleExpression: 'rate(1 minute)'
+      State: 'ENABLED'
+      Targets:
+        -
+          Arn: !GetAtt CustomAuthLambdaFunction.Arn
+          Id: 'CustomAuthLambdaFunction'
+        -
+          Arn: !GetAtt QueryLambdaFunction.Arn
+          Id: 'QueryLambdaFunction'
+  AllowWarmEventToInvokeLambda:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      FunctionName:
+        Ref: 'CustomAuthLambdaFunction'
+      Action: 'lambda:InvokeFunction'
+      Principal: 'events.amazonaws.com'
+      SourceArn: !GetAtt ScheduledWarmRule.Arn
+  AllowWarmEventToInvokeQueryLambda:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      FunctionName:
+        Ref: 'QueryLambdaFunction'
+      Action: 'lambda:InvokeFunction'
+      Principal: 'events.amazonaws.com'
+      SourceArn: !GetAtt ScheduledWarmRule.Arn
+  BackupDynamoDBAndESLambdaFunction:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      CodeUri:
+        Bucket: !Ref SamDeploymentsS3Bucket
+        Key: target/HelloWorld-1.0.jar
+      Handler: helloworld.App::handleRequest
+      Runtime: java8
+      Environment:
+        Variables:
+          ENV: !Ref Env
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Action:
+                - 'logs:CreateLogGroup'
+                - 'logs:CreateLogStream'
+                - 'logs:PutLogEvents'
+              Effect: 'Allow'
+              Resource:
+                - !GetAtt BackupLogGroup.Arn
+            - Action:
+                - 'dynamodb:CreateBackup'
+                - 'dynamodb:RestoreTableFromBackup'
+                - 'dynamodb:PutItem'
+                - 'dynamodb:UpdateItem'
+                - 'dynamodb:DeleteItem'
+                - 'dynamodb:GetItem'
+                - 'dynamodb:Query'
+                - 'dynamodb:Scan'
+                - 'dynamodb:BatchWriteItem'
+              Effect: 'Allow'
+              Resource:
+                - !GetAtt Edgestore.Arn
+                - !GetAtt Graphindex.Arn
+                - !GetAtt Systemlog.Arn
+                - !GetAtt JanusGraphIds.Arn
+                - !GetAtt SystemProperties.Arn
+                - !GetAtt Txlog.Arn
+            - Action:
+                - 'es:ESHttpPost'
+                - 'es:ESHttpGet'
+                - 'es:ESHttpPut'
+                - 'es:ESHttpDelete'
+              Effect: 'Allow'
+              Resource:
+                - !GetAtt ElasticsearchDomain.DomainArn
+  S3EventDrivenLambdaFunction:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      CodeUri:
+        Bucket: !Ref SamDeploymentsS3Bucket
+        Key: target/HelloWorld-1.0.jar
+      Handler: helloworld.App::handleRequest
+      Runtime: java8
+      Environment:
+        Variables:
+          ENV: !Ref Env
+          INGEST_BUCKET: !Sub 'xmlfeeds3bucket-${Env}'
+          KINESIS_STREAM: !Ref KinesisStream
+      Events:
+        XmlUpload:
+          Type: S3
+          Properties:
+            Bucket: !Ref XmlIngestBucket
+            Events: s3:ObjectCreated:*
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Action:
+                - 'logs:CreateLogGroup'
+                - 'logs:CreateLogStream'
+                - 'logs:PutLogEvents'
+              Effect: 'Allow'
+              Resource:
+                - !GetAtt S3EventDrivenLogGroup.Arn
+            - Action:
+                - 's3:*'
+              Effect: 'Allow'
+              Resource:
+                - !Join
+                  - ''
+                  - - 'arn:aws:s3:::'
+                    - !Sub 'xmlfeeds3bucket-${Env}'
+                - !Join
+                  - ''
+                  - - 'arn:aws:s3:::'
+                    - !Sub 'xmlfeeds3bucket-${Env}/'
+                    - '*'
+  CustomAuthLambdaFunction:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      CodeUri:
+        Bucket: !Ref SamDeploymentsS3Bucket
+        Key: target/HelloWorld-1.0.jar
+      Handler: helloworld.App::handleRequest
+      Runtime: java8
+      Environment:
+        Variables:
+          ENV: !Ref Env
+          JWT_PUBLIC_KEY_URL: !Ref JwtPubKeyUrl
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Action:
+                - 'logs:CreateLogGroup'
+                - 'logs:CreateLogStream'
+                - 'logs:PutLogEvents'
+              Effect: 'Allow'
+              Resource:
+                - !GetAtt CustomAuthLogGroup.Arn
+  TransformLambdaFunction:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref TransformLambdaSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnet1
+      CodeUri:
+        Bucket: !Ref SamDeploymentsS3Bucket
+        Key: target/HelloWorld-1.0.jar
+      Handler: helloworld.App::handleRequest
+      Runtime: java8
+      Events:
+        Stream:
+          Type: Kinesis
+          Properties:
+            Stream: !GetAtt KinesisStream.Arn
+            BatchSize: !Ref BatchSize
+            StartingPosition: TRIM_HORIZON
+      Environment:
+        Variables:
+          ENV: !Ref Env
+          TRANSFORMED_BUCKET: !Ref TransformedBucket
+          EDGE_STORE: !Ref Edgestore
+          GRAPH_INDEX: !Ref Graphindex
+          SYSTEM_LOG: !Ref Systemlog
+          JANUS_GRAPHIDS: !Ref JanusGraphIds
+          SYSTEM_PROPERTIES: !Ref SystemProperties
+          TX_LOG: !Ref Txlog
+          ES_DOMAIN_ENDPOINT: !GetAtt ElasticsearchDomain.DomainEndpoint
+          ES_DOMAIN_ARN: !GetAtt ElasticsearchDomain.DomainArn
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Action:
+                - 'logs:CreateLogGroup'
+                - 'logs:CreateLogStream'
+                - 'logs:PutLogEvents'
+              Effect: 'Allow'
+              Resource:
+                - !GetAtt TransformLogGroup.Arn
+            - Action:
+                - 'dynamodb:*'
+              Effect: 'Allow'
+              Resource:
+                - '*'
+            - Action:
+                - 'ec2:CreateNetworkInterface'
+                - 'ec2:DescribeNetworkInterfaces'
+                - 'ec2:DeleteNetworkInterface'
+              Effect: 'Allow'
+              Resource:
+                - '*'
+            - Action:
+                - 'kinesis:GetRecords'
+                - 'kinesis:GetShardIterator'
+                - 'kinesis:DescribeStream'
+                - 'kinesis:ListStream'
+              Effect: 'Allow'
+              Resource:
+                - !GetAtt KinesisStream.Arn
+  QueryLambdaFunction:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref QueryLambdaFunctionSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
+      CodeUri:
+        Bucket: !Ref SamDeploymentsS3Bucket
+        Key: target/HelloWorld-1.0.jar
+      Handler: helloworld.App::handleRequest
+      Runtime: java8
+      Environment:
+        Variables:
+          ENV: !Ref Env
+          EDGE_STORE: !Ref Edgestore
+          GRAPH_INDEX: !Ref Graphindex
+          SYSTEM_LOG: !Ref Systemlog
+          JANUS_GRAPHIDS: !Ref JanusGraphIds
+          SYSTEM_PROPERTIES: !Ref SystemProperties
+          TX_LOG: !Ref Txlog
+          ES_DOMAIN_ENDPOINT: !GetAtt ElasticsearchDomain.DomainEndpoint
+          ES_DOMAIN_ARN: !GetAtt ElasticsearchDomain.DomainArn
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+          - Action:
+              - 'logs:CreateLogGroup'
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+            Effect: 'Allow'
+            Resource:
+              - !GetAtt QueryLogGroup.Arn
+          - Action:
+              - 'dynamodb:*'
+            Effect: 'Allow'
+            Resource:
+              - !GetAtt Edgestore.Arn
+              - !GetAtt Graphindex.Arn
+              - !GetAtt Systemlog.Arn
+              - !GetAtt JanusGraphIds.Arn
+              - !GetAtt SystemProperties.Arn
+              - !GetAtt Txlog.Arn
+          - Action:
+              - 'ec2:CreateNetworkInterface'
+              - 'ec2:DescribeNetworkInterfaces'
+              - 'ec2:DeleteNetworkInterface'
+            Effect: 'Allow'
+            Resource:
+              - '*'
+  QueryLambdaFunctionSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Group for query lambda functions
+      VpcId:
+        Ref: VPC
+  TransformLambdaSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Group for transform lambda functions
+      VpcId:
+        Ref: VPC
+  VPC:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Ref Env
+        - Key: Env
+          Value: !Ref Env
+  VPCS3Endpoint:
+    Type: 'AWS::EC2::VPCEndpoint'
+    DependsOn:
+      - 'VPC'
+    Properties:
+      RouteTableIds:
+        - !Ref PublicRouteTable
+      ServiceName: !Join
+        - ''
+        - - com.amazonaws.
+          - !Ref 'AWS::Region'
+          - .s3
+      VpcId: !Ref VPC
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action:
+              - 's3:*'
+            Resource:
+              - '*'
+  APIGatewayVPCEndpoint:
+    Type: 'AWS::EC2::VPCEndpoint'
+    Properties:
+      VpcEndpointType: Interface
+      ServiceName: !Join
+        - ''
+        - - com.amazonaws.
+          - !Ref 'AWS::Region'
+          - .execute-api
+      VpcId: !Ref VPC
+  InternetGateway:
+    Type: 'AWS::EC2::InternetGateway'
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Ref Env
+        - Key: Env
+          Value: !Ref Env
+  InternetGatewayAttachment:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+  PublicSubnet1:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: !Ref PublicSubnet1CIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${Env} Public Subnet (AZ1)
+        - Key: Env
+          Value: !Ref Env
+  PublicSubnet2:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: !Ref PublicSubnet2CIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${Env} Public Subnet (AZ2)
+        - Key: Env
+          Value: !Ref Env
+  PrivateSubnet1:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: !Ref PrivateSubnet1CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${Env} Private Subnet (AZ1)
+        - Key: Env
+          Value: !Ref Env
+  PrivateSubnet2:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs '' ]
+      CidrBlock: !Ref PrivateSubnet2CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${Env} Private Subnet (AZ2)
+        - Key: Env
+          Value: !Ref Env
+  NatGateway1EIP:
+    Type: 'AWS::EC2::EIP'
+    DependsOn: 'InternetGatewayAttachment'
+    Properties:
+      Domain: vpc
+  NatGateway2EIP:
+    Type: 'AWS::EC2::EIP'
+    DependsOn: 'InternetGatewayAttachment'
+    Properties:
+      Domain: vpc
+  NatGateway1:
+    Type: 'AWS::EC2::NatGateway'
+    Properties:
+      AllocationId: !GetAtt NatGateway1EIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+  NatGateway2:
+    Type: 'AWS::EC2::NatGateway'
+    Properties:
+      AllocationId: !GetAtt NatGateway2EIP.AllocationId
+      SubnetId: !Ref PublicSubnet2
+  PublicRouteTable:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+  DefaultPublicRoute:
+    Type: 'AWS::EC2::Route'
+    DependsOn: 'InternetGatewayAttachment'
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  PublicSubnet1RouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+  PublicSubnet2RouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet2
+  PrivateRouteTable1:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${Env} Private Routes (AZ1)
+        - Key: Env
+          Value: !Ref Env
+  DefaultPrivateRoute1:
+    Type: 'AWS::EC2::Route'
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway1
+  PrivateSubnet1RouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      SubnetId: !Ref PrivateSubnet1
+  PrivateRouteTable2:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${Env} Private Routes (AZ2)
+        - Key: Env
+          Value: !Ref Env
+  DefaultPrivateRoute2:
+    Type: 'AWS::EC2::Route'
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable2
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway2
+  PrivateSubnet2RouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable2
+      SubnetId: !Ref PrivateSubnet2
+  ElasticsearchDomain:
+    Type: 'AWS::Elasticsearch::Domain'
+    DependsOn:
+      - 'ESServiceLinkedRole'
+    Properties:
+      EncryptionAtRestOptions:
+        Enabled: true
+      DomainName: !Sub 'elasticsearch-domain-${Env}'
+      ElasticsearchVersion: !Ref ElasticsearchVersion
+      ElasticsearchClusterConfig:
+        InstanceCount: !Ref ESInstanceCount
+        InstanceType: !Ref ESInstanceType
+      EBSOptions:
+        EBSEnabled: 'true'
+        Iops: !Ref ElasticsearchDomainIops
+        VolumeSize: !Ref ESVolumeSize
+        VolumeType: standard
+      SnapshotOptions:
+        AutomatedSnapshotStartHour: '0'
+      AccessPolicies:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Deny
+            Principal:
+              AWS: '*'
+            Action: 'es:*'
+            Resource: '*'
+      AdvancedOptions:
+        rest.action.multi.allow_explicit_index: 'true'
+      Tags:
+        - Key: Env
+          Value: !Ref Env
+      VPCOptions:
+        SubnetIds:
+          - !Ref PrivateSubnet1
+        SecurityGroupIds:
+          - !Ref ESSecurityGroup
+  ESSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'VPC security group for elasticseach'
+      VpcId: !Ref VPC
+      GroupName: 'ES Security Group'
+      SecurityGroupIngress:
+        - FromPort: '443'
+          IpProtocol: tcp
+          ToPort: '443'
+          CidrIp: !Ref VpcCIDR
+  ESServiceLinkedRole:
+    Type: 'AWS::IAM::ServiceLinkedRole'
+    Properties:
+      AWSServiceName: es.amazonaws.com
+      Description: 'Service linked role for elasticsearch'
+  ESSearchLogGroup:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      LogGroupName: !Sub '/aws/aes/domains/elasticsearch-domain-${Env}/search-logs'
+      RetentionInDays: 90
+  ESErrorLogGroup:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      LogGroupName: !Sub '/aws/aes/domains/elasticsearch-domain-${Env}/error-logs'
+      RetentionInDays: 90
+  ESIndexLogGroup:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      LogGroupName: !Sub '/aws/aes/domains/elasticsearch-domain-${Env}/index-logs'
+      RetentionInDays: 90
+  ESCloudWatchLogsRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          -
+            Effect: 'Allow'
+            Principal:
+              Service:
+                - 'es.amazonaws.com'
+            Action:
+              - 'sts:AssumeRole'
+      Path: '/'
+      Policies:
+        -
+          PolicyName: 'root'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              -
+                Effect: Allow
+                Action:
+                  - 'logs:PutLogEvents'
+                  - 'logs:PutLogEventsBatch'
+                  - 'logs:CreateLogStream'
+                Resource:
+                  - !GetAtt ESSearchLogGroup.Arn
+                  - !GetAtt ESErrorLogGroup.Arn
+                  - !GetAtt ESIndexLogGroup.Arn
+  ESSnapshotRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          -
+            Effect: 'Allow'
+            Principal:
+              Service:
+                - 'es.amazonaws.com'
+            Action:
+              - 'sts:AssumeRole'
+      Path: '/'
+      Policies:
+        -
+          PolicyName: 'root'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              -
+                Effect: Allow
+                Action:
+                  - 's3:GetObject'
+                  - 's3:PutObject'
+                  - 's3:DeleteObject'
+                Resource: !Sub 'arn:aws:s3:::${ESSnapshotBucket}/*'
+              -
+                Effect: Allow
+                Action:
+                  - 's3:ListBucket'
+                Resource: !Sub 'arn:aws:s3:::${ESSnapshotBucket}'
+Outputs:
+  XmlIngestBucket:
+    Description: 'Bucket for Xml Ingestion'
+    Value: !Ref XmlIngestBucket
+    Export:
+      Name: !Sub 'XmlIngestBucket-${Env}'
+  TransformedBucket:
+    Description: 'Bucket for transformed data'
+    Value: !Ref TransformedBucket
+    Export:
+      Name: !Sub 'TransformLambdaFunction-${Env}'
+  ESSnapshotBucket:
+    Description: 'Bucket for ES snapshots'
+    Value: !Ref ESSnapshotBucket
+    Export:
+      Name: !Sub 'ESSnapshotBucket-${Env}'
+  TransformLambdaFunction:
+    Description: 'Process XML Lambda Function ARN'
+    Value: !GetAtt TransformLambdaFunction.Arn
+    Export:
+      Name: !Sub 'TransformLambdaFunctionArn-${Env}'
+  S3EventDrivenLambdaFunction:
+    Description: 'S3 event driven Lambda Function ARN'
+    Value: !GetAtt S3EventDrivenLambdaFunction.Arn
+    Export:
+      Name: !Sub 'S3EventDrivenLambdaFunctionArn-${Env}'
+  CustomAuthLambdaFunction:
+    Description: 'Custom authorizer Lambda Function ARN'
+    Value: !GetAtt CustomAuthLambdaFunction.Arn
+    Export:
+      Name: !Sub 'CustomAuthLambdaFunctionArn-${Env}'
+  KinesisStream:
+    Description: 'Kinesis XML Stream'
+    Value: !GetAtt KinesisStream.Arn
+    Export:
+      Name: !Sub 'KinesisStream-${Env}'
+  FireHoseStream:
+    Description: 'Kinesis Firehose Stream'
+    Value: !Ref FireHoseStream
+    Export:
+      Name: !Sub 'FireHoseStream-${Env}'
+  VPC:
+    Description: A reference to the created VPC
+    Value: !Ref VPC
+    Export:
+      Name: !Sub 'VPCID-${Env}'
+  PublicSubnets:
+    Description: A list of the public subnets
+    Value: !Join [ ',', [ !Ref PublicSubnet1, !Ref PublicSubnet2 ]]
+    Export:
+      Name: !Sub 'PublicSubnets-${Env}'
+  PrivateSubnets:
+    Description: A list of the private subnets
+    Value: !Join [ ',', [ !Ref PrivateSubnet1, !Ref PrivateSubnet2 ]]
+    Export:
+      Name: !Sub 'PrivateSubnets-${Env}'
+  PublicSubnet1:
+    Description: A reference to the public subnet in the 1st Availability Zone
+    Value: !Ref PublicSubnet1
+    Export:
+      Name: !Sub 'PublicSubnet1-${Env}'
+  PublicSubnet2:
+    Description: A reference to the public subnet in the 2nd Availability Zone
+    Value: !Ref PublicSubnet2
+    Export:
+      Name: !Sub 'PublicSubnet2-${Env}'
+  PrivateSubnet1:
+    Description: A reference to the private subnet in the 1st Availability Zone
+    Value: !Ref PrivateSubnet1
+    Export:
+      Name: !Sub 'PrivateSubnet1-${Env}'
+  PrivateSubnet2:
+    Description: A reference to the private subnet in the 2nd Availability Zone
+    Value: !Ref PrivateSubnet2
+    Export:
+      Name: !Sub 'PrivateSubnet2-${Env}'
+  Edgestore:
+    Description: Edgestore DynamoDB table ID
+    Value: !Ref Edgestore
+    Export:
+      Name: !Sub 'Edgestore-${Env}'
+  EdgestoreArn:
+    Description: Edgestore DynamoDB table ARN
+    Value: !GetAtt Edgestore.Arn
+    Export:
+      Name: !Sub 'EdgestoreArn-${Env}'
+  Graphindex:
+    Description: Graphindex DynamoDB table ID
+    Value: !Ref Graphindex
+    Export:
+      Name: !Sub 'Graphindex-${Env}'
+  GraphindexArn:
+    Description: Graphindex DynamoDB table ARN
+    Value: !GetAtt Graphindex.Arn
+    Export:
+      Name: !Sub 'GraphindexArn-${Env}'
+  Systemlog:
+    Description: Systemlog DynamoDB table ID
+    Value: !Ref Systemlog
+    Export:
+      Name: !Sub 'Systemlog-${Env}'
+  SystemlogArn:
+    Description: Systemlog DynamoDB table ARN
+    Value: !GetAtt Systemlog.Arn
+    Export:
+      Name: !Sub 'SystemlogArn-${Env}'
+  JanusGraphIds:
+    Description: JanusGraphIds DynamoDB table ID
+    Value: !Ref JanusGraphIds
+    Export:
+      Name: !Sub 'JanusGraphIds-${Env}'
+  JanusGraphIdsArn:
+    Description: JanusGraphIds DynamoDB table ARN
+    Value: !GetAtt JanusGraphIds.Arn
+    Export:
+      Name: !Sub 'JanusGraphIdsArn-${Env}'
+  SystemProperties:
+    Description: SystemProperties DynamoDB table ID
+    Value: !Ref SystemProperties
+    Export:
+      Name: !Sub 'SystemProperties-${Env}'
+  SystemPropertiesArn:
+    Description: SystemProperties DynamoDB table ARN
+    Value: !GetAtt SystemProperties.Arn
+    Export:
+      Name: !Sub 'SystemPropertiesArn-${Env}'
+  Txlog:
+    Description: Txlog DynamoDB table ID
+    Value: !Ref Txlog
+    Export:
+      Name: !Sub 'Txlog-${Env}'
+  TxlogArn:
+    Description: Txlog DynamoDB table ARN
+    Value: !GetAtt Txlog.Arn
+    Export:
+      Name: !Sub 'TxlogArn-${Env}'
+  ESDomainArn:
+    Value: !GetAtt ElasticsearchDomain.DomainArn
+    Export:
+      Name: !Sub 'ESDomainArn-${Env}'
+  ESDomainEndpoint:
+    Value: !GetAtt ElasticsearchDomain.DomainEndpoint
+    Export:
+      Name: !Sub 'ESDomainEndpoint-${Env}'
+  ESSecurityGroupId:
+    Value: !Ref ESSecurityGroup
+    Export:
+      Name: !Sub 'ESSecurityGroup-${Env}'
+  ESCloudWatchLogsRole:
+    Value: !Ref ESCloudWatchLogsRole
+    Export:
+      Name: !Sub 'ESCloudWatchLogsRole-${Env}'
+  ESSearchLogGroupName:
+    Value: !Ref ESSearchLogGroup
+    Export:
+      Name: !Sub 'ESSearchLogGroupName-${Env}'
+  ESSearchLogGroupArn:
+    Value: !GetAtt ESSearchLogGroup.Arn
+    Export:
+      Name: !Sub 'ESSearchLogGroupArn-${Env}'
+  ESIndexLogGroupName:
+    Value: !Ref ESSearchLogGroup
+    Export:
+      Name: !Sub 'ESIndexLogGroupName-${Env}'
+  ESIndexLogGroupArn:
+    Value: !GetAtt ESIndexLogGroup.Arn
+    Export:
+      Name: !Sub 'ESIndexLogGroupArn-${Env}'
+  ESErrorLogGroupName:
+    Value: !Ref ESSearchLogGroup
+    Export:
+      Name: !Sub 'ESErrorLogGroupName-${Env}'
+  ESErrorLogGroupArn:
+    Value: !GetAtt ESErrorLogGroup.Arn
+    Export:
+      Name: !Sub 'ESErrorLogGroupArn-${Env}'
+  ESSnapshotRole:
+    Value: !GetAtt ESSnapshotRole.Arn
+    Export:
+      Name: !Sub 'ESSnapshotRole-${Env}'
