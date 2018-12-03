@@ -808,12 +808,16 @@ Resources:
               Effect: 'Allow'
               Resource:
                 - !GetAtt ElasticsearchDomain.DomainArn
+      Tags:
+        Env: !Ref Env
+      KmsKeyArn: !Ref BackupDynamoDBAndESLambdaKmsKey
   S3EventDrivenLambdaFunction:
     Type: 'AWS::Serverless::Function'
     Properties:
       CodeUri:
         Bucket: !Ref SamDeploymentsS3Bucket
         Key: target/HelloWorld-1.0.jar
+      ReservedConcurrentExecutions: 1
       Handler: helloworld.App::handleRequest
       Runtime: java8
       Environment:
@@ -850,6 +854,9 @@ Resources:
                   - - 'arn:aws:s3:::'
                     - !Sub 'xmlfeeds3bucket-${Env}/'
                     - '*'
+      Tags:
+        Env: !Ref Env
+      KmsKeyArn: !Ref S3EventDrivenLambdaKmsKey
   CustomAuthLambdaFunction:
     Type: 'AWS::Serverless::Function'
     Properties:
@@ -872,6 +879,9 @@ Resources:
               Effect: 'Allow'
               Resource:
                 - !GetAtt CustomAuthLogGroup.Arn
+      Tags:
+        Env: !Ref Env
+      KmsKeyArn: !Ref CustomAuthLambdaKmsKey
   TransformLambdaFunction:
     Type: 'AWS::Serverless::Function'
     Properties:
@@ -934,6 +944,9 @@ Resources:
               Effect: 'Allow'
               Resource:
                 - !GetAtt KinesisStream.Arn
+      Tags:
+        Env: !Ref Env
+      KmsKeyArn: !Ref TransformLambdaKmsKey
   QueryLambdaFunction:
     Type: 'AWS::Serverless::Function'
     Properties:
@@ -986,6 +999,9 @@ Resources:
             Effect: 'Allow'
             Resource:
               - '*'
+      Tags:
+        Env: !Ref Env
+      KmsKeyArn: !Ref QueryLambdaKmsKey
   QueryLambdaFunctionSecurityGroup:
     Type: 'AWS::EC2::SecurityGroup'
     Properties:
