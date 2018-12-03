@@ -810,7 +810,7 @@ Resources:
                 - !GetAtt ElasticsearchDomain.DomainArn
       Tags:
         Env: !Ref Env
-      KmsKeyArn: !Ref BackupDynamoDBAndESLambdaKmsKey
+      KmsKeyArn: !Ref KmsKey
   S3EventDrivenLambdaFunction:
     Type: 'AWS::Serverless::Function'
     Properties:
@@ -856,7 +856,7 @@ Resources:
                     - '*'
       Tags:
         Env: !Ref Env
-      KmsKeyArn: !Ref S3EventDrivenLambdaKmsKey
+      KmsKeyArn: !Ref KmsKey
   CustomAuthLambdaFunction:
     Type: 'AWS::Serverless::Function'
     Properties:
@@ -881,7 +881,7 @@ Resources:
                 - !GetAtt CustomAuthLogGroup.Arn
       Tags:
         Env: !Ref Env
-      KmsKeyArn: !Ref CustomAuthLambdaKmsKey
+      KmsKeyArn: !Ref KmsKey
   TransformLambdaFunction:
     Type: 'AWS::Serverless::Function'
     Properties:
@@ -946,7 +946,7 @@ Resources:
                 - !GetAtt KinesisStream.Arn
       Tags:
         Env: !Ref Env
-      KmsKeyArn: !Ref TransformLambdaKmsKey
+      KmsKeyArn: !Ref KmsKey
   QueryLambdaFunction:
     Type: 'AWS::Serverless::Function'
     Properties:
@@ -1001,7 +1001,7 @@ Resources:
               - '*'
       Tags:
         Env: !Ref Env
-      KmsKeyArn: !Ref QueryLambdaKmsKey
+      KmsKeyArn: !Ref KmsKey
   QueryLambdaFunctionSecurityGroup:
     Type: 'AWS::EC2::SecurityGroup'
     Properties:
