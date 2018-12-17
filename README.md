@@ -58,14 +58,6 @@ $ aws cloudformation describe-stacks \
     --stack-name data-pipeline-<env> --query 'Stacks[].Outputs'
 ```
 
-## Enable PITR for dynamodb continuous backups (one off)
-
-```
-$ aws dynamodb update-continuous-backups \
---table-name TABLENAME  \
---point-in-time-recovery-specification PointInTimeRecoveryEnabled=True
-```
-
 ## Configure Elasticsearch logging to a cloudwatch log group (one off)
 * See [docs](https://docs.aws.amazon.com/elasticsearch-service/latest/developerguide/es-createupdatedomains.html#es-createdomain-configure-slow-logs)
 ```bash

@@ -283,6 +283,8 @@ Resources:
           - _edgestore
       SSESpecification:
         SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
       Tags:
         - Key: Env
           Value: !Ref Env
@@ -315,6 +317,8 @@ Resources:
           - _graphindex
       SSESpecification:
         SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
       Tags:
         - Key: Env
           Value: !Ref Env
@@ -347,6 +351,8 @@ Resources:
           - _janusgraph_ids
       SSESpecification:
         SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
       Tags:
         - Key: Env
           Value: !Ref Env
@@ -379,6 +385,8 @@ Resources:
           - _system_properties
       SSESpecification:
         SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
       Tags:
         - Key: Env
           Value: !Ref Env
@@ -411,6 +419,8 @@ Resources:
           - _txlog
       SSESpecification:
         SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
       Tags:
         - Key: Env
           Value: !Ref Env
@@ -443,6 +453,8 @@ Resources:
           - _systemlog
       SSESpecification:
         SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
       Tags:
         - Key: Env
           Value: !Ref Env
